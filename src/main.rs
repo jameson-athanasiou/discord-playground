@@ -1,5 +1,7 @@
+mod deals_source;
 mod settings;
 
+use async_recursion::async_recursion;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -11,7 +13,7 @@ use serenity::prelude::*;
 use settings::Settings;
 
 #[group]
-#[commands(deals)]
+#[commands(deals, test)]
 struct General;
 
 struct Handler;
@@ -57,38 +59,74 @@ async fn main() {
         .await
         .expect("Error creating client");
 
-    if let Err(why) = client.start().await {
-        println!("An error occurred while running the client: {:?}", why);
+    match client.start().await {
+        Ok(_) => println!("Bot started"),
+        Err(e) => println!("Bot encountered an error on startup - {}", e),
     }
 }
 
-async fn get_todays_deals() -> String {
-    let url =
-        "https://www.reddit.com/r/golf/comments/11trhpq/daily_golf_deals_03172023_nurseresidences.json";
+async fn get_deals_posts() -> Result<serde_json::Value, reqwest::Error> {
+    let url = "https://www.reddit.com/user/Nurseresidences.json";
 
     let res = reqwest::Client::new()
         .get(url)
         .send()
-        .await
-        .unwrap()
+        .await?
         .json::<serde_json::Value>()
-        .await
-        .unwrap();
+        .await?;
 
-    let first = res.get(0).unwrap().to_owned();
+    Ok(res)
+}
 
-    let post: RedditPost = serde_json::from_value(first).unwrap();
+fn get_post(all_posts: serde_json::Value, today: String) -> Option<PostData> {
+    let data = all_posts.get("data").unwrap().get("children").unwrap();
 
-    let first_child = post.data.children.first().unwrap().to_owned();
+    let children = data.as_array().unwrap();
 
-    let text = first_child.data.selftext.to_owned();
+    let mut deals_posts: Vec<PostData> = Vec::new();
+
+    for child in children {
+        let title = child.get("data").unwrap().get("title");
+
+        if title.is_some() {
+            let post: PostData =
+                serde_json::from_value(child.get("data").unwrap().to_owned()).unwrap();
+            deals_posts.push(post);
+        }
+    }
+
+    let item = deals_posts.into_iter().find(|x| {
+        let todays_post_title = format!("Daily Golf Deals {} (NurseResidences)", today);
+        x.title.contains(&todays_post_title)
+    });
+
+    item
+}
+
+#[async_recursion]
+async fn get_post_body(attempts: u64) -> String {
+    if attempts > 4 {
+        return String::from("");
+    }
+
+    let mut text = String::from("");
+    let today = deals_source::get_title_date(attempts);
+
+    let posts = get_deals_posts().await.unwrap();
+    let result = get_post(posts, today);
+
+    if let None = result {
+        text = get_post_body(attempts + 1).await;
+    } else {
+        text = result.unwrap().selftext;
+    }
 
     text
 }
 
 #[command]
 async fn deals(ctx: &Context, msg: &Message) -> CommandResult {
-    let result = get_todays_deals().await;
+    let result = get_post_body(0).await;
 
     let parts: Vec<&str> = result.split_inclusive("\n").collect();
 
@@ -97,12 +135,10 @@ async fn deals(ctx: &Context, msg: &Message) -> CommandResult {
         "Non-clubs Request",
         "Clubs Request",
         "[Sign-up here]",
-        "Fill out the GOogle form below",
+        "Fill out the Google form below",
     ];
 
     for part in parts {
-        println!("part = {}", part);
-
         let mut message_to_send = Some(part);
 
         for baddie in bad_parts {
@@ -122,5 +158,15 @@ async fn deals(ctx: &Context, msg: &Message) -> CommandResult {
         }
     }
 
+    Ok(())
+}
+
+#[command]
+async fn test(ctx: &Context, msg: &Message) -> CommandResult {
+    let posts = get_deals_posts().await.unwrap();
+
+    // find_posts(posts);
+
+    msg.reply(ctx, "test").await?;
     Ok(())
 }
