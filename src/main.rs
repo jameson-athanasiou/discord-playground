@@ -1,17 +1,17 @@
 mod settings;
 
-use html_parser;
 use reqwest;
+use serde::{Deserialize, Serialize};
+use serde_json;
 use serenity::async_trait;
 use serenity::framework::standard::macros::{command, group};
 use serenity::framework::standard::{CommandResult, StandardFramework};
 use serenity::model::channel::Message;
 use serenity::prelude::*;
 use settings::Settings;
-use tl;
 
 #[group]
-#[commands(ping, deals)]
+#[commands(deals)]
 struct General;
 
 struct Handler;
@@ -19,18 +19,34 @@ struct Handler;
 #[async_trait]
 impl EventHandler for Handler {}
 
+#[derive(Serialize, Deserialize, Debug)]
+struct PostData {
+    selftext: String,
+    title: String,
+    url: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ChildrenData {
+    data: PostData,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ApiData {
+    children: Vec<ChildrenData>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct RedditPost {
+    data: ApiData,
+}
+
 #[tokio::main]
 async fn main() {
-    // lookup golf deals on reddit
-
-    println!("Hello, world!");
-
     let settings = Settings::new().unwrap();
 
-    println!("{}", settings.discord.token);
-
     let framework = StandardFramework::new()
-        .configure(|c| c.prefix("!")) // set the bot's prefix to "~"
+        .configure(|c| c.prefix("!"))
         .group(&GENERAL_GROUP);
 
     let token = settings.discord.token;
@@ -41,47 +57,70 @@ async fn main() {
         .await
         .expect("Error creating client");
 
-    // start listening for events by starting a single shard
     if let Err(why) = client.start().await {
         println!("An error occurred while running the client: {:?}", why);
     }
 }
 
-async fn get_todays_deals() {
+async fn get_todays_deals() -> String {
     let url =
-        "https://www.reddit.com/r/golf/comments/11trhpq/daily_golf_deals_03172023_nurseresidences/";
+        "https://www.reddit.com/r/golf/comments/11trhpq/daily_golf_deals_03172023_nurseresidences.json";
 
     let res = reqwest::Client::new()
         .get(url)
         .send()
         .await
         .unwrap()
-        .text()
+        .json::<serde_json::Value>()
         .await
         .unwrap();
 
-    let dom = tl::parse(&res, tl::ParserOptions::default()).unwrap();
-    let parser = dom.parser();
-    let element = dom
-        .get_elements_by_class_name("usertext-body")
-        .last()
-        .expect("Failed to find element")
-        .get(parser)
-        .unwrap();
+    let first = res.get(0).unwrap().to_owned();
 
-    println!("{:?}", element);
-}
+    let post: RedditPost = serde_json::from_value(first).unwrap();
 
-#[command]
-async fn ping(ctx: &Context, msg: &Message) -> CommandResult {
-    msg.reply(ctx, "Pong!").await?;
+    let first_child = post.data.children.first().unwrap().to_owned();
 
-    Ok(())
+    let text = first_child.data.selftext.to_owned();
+
+    text
 }
 
 #[command]
 async fn deals(ctx: &Context, msg: &Message) -> CommandResult {
-    get_todays_deals().await;
+    let result = get_todays_deals().await;
+
+    let parts: Vec<&str> = result.split_inclusive("\n").collect();
+
+    let bad_parts = [
+        "in case you missed it",
+        "Non-clubs Request",
+        "Clubs Request",
+        "[Sign-up here]",
+        "Fill out the GOogle form below",
+    ];
+
+    for part in parts {
+        println!("part = {}", part);
+
+        let mut message_to_send = Some(part);
+
+        for baddie in bad_parts {
+            if part.contains(baddie) {
+                message_to_send = None;
+            }
+        }
+
+        if !part.contains("https") {
+            message_to_send = None;
+        }
+
+        if let Some(m) = message_to_send {
+            if let Err(err) = msg.reply(ctx, m).await {
+                println!("Error sending reply - {}", err);
+            };
+        }
+    }
 
     Ok(())
 }

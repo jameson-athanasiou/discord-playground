@@ -7,10 +7,9 @@ edition = "2021"
 
 [dependencies]
 config = "0.13.3"
-html_parser = "0.6.3"
 reqwest = "0.11.14"
 serde = "1.0.156"
 serde_derive = "1.0.156"
+serde_json = "1.0.94"
 serenity = "0.11.5"
-tl = "0.7.7"
 tokio = { version = "1.26.0", features = ["full"] }
