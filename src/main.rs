@@ -2,6 +2,8 @@ mod deals_source;
 mod settings;
 
 use async_recursion::async_recursion;
+use env_logger;
+use log::{debug, error, info, log_enabled, Level};
 use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_json;
@@ -45,6 +47,10 @@ struct RedditPost {
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
+
+    error!("Starting bot server...");
+
     let settings = Settings::new().unwrap();
 
     let framework = StandardFramework::new()
